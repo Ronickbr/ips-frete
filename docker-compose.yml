@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Serviço Apache + PHP
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sistema_fretes_web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./src:/var/www/html
+      - ./config/php.ini:/usr/local/etc/php/php.ini
+    depends_on:
+      - db
+    networks:
+      - sistema_fretes_network
+    environment:
+      - DB_HOST=db
+      - DB_NAME=sistema_fretes
+      - DB_USER=root
+      - DB_PASSWORD=root123
+
+  # Serviço MySQL
+  db:
+    image: mysql:8.0
+    container_name: sistema_fretes_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: sistema_fretes
+      MYSQL_USER: fretes_user
+      MYSQL_PASSWORD: fretes_pass
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - sistema_fretes_network
+    command: --default-authentication-plugin=mysql_native_password
+
+  # Serviço phpMyAdmin
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin:latest
+    container_name: sistema_fretes_phpmyadmin
+    restart: always
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_PORT: 3306
+      PMA_USER: root
+      PMA_PASSWORD: root123
+      MYSQL_ROOT_PASSWORD: root123
+    depends_on:
+      - db
+    networks:
+      - sistema_fretes_network
+
+volumes:
+  mysql_data:
+    driver: local
+
+networks:
+  sistema_fretes_network:
+    driver: bridge
