@@ -20,7 +20,7 @@ Sistema web para controle interno de fretes desenvolvido com PHP, Bootstrap, Jav
 
 ### 1. Clone ou baixe o projeto
 ```bash
-cd "d:\Sites\Sistema Willian"
+cd "d:\Sites\Sistema_frete"
 ```
 
 ### 2. Construir e iniciar os containers
@@ -201,4 +201,5 @@ Para suporte técnico ou dúvidas sobre o sistema:
 ---
 
 **Desenvolvido para controle interno de fretes**  
+
 *Ambiente Docker - PHP 8.2 + MySQL 8.0 + Apache 2.4*
