@@ -36,17 +36,17 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
     
     // Filtro por período de datas
     if (!empty($filtros['data_inicio']) && !empty($filtros['data_fim'])) {
-        $whereConditions[] = "DATE(data_pedido) BETWEEN ? AND ?";
+        $whereConditions[] = "DATE(p.created_at) BETWEEN ? AND ?";
         $params[] = $filtros['data_inicio'];
         $params[] = $filtros['data_fim'];
     } elseif (!empty($filtros['data_inicio'])) {
-        $whereConditions[] = "DATE(data_pedido) >= ?";
+        $whereConditions[] = "DATE(p.created_at) >= ?";
         $params[] = $filtros['data_inicio'];
     } elseif (!empty($filtros['data_fim'])) {
-        $whereConditions[] = "DATE(data_pedido) <= ?";
+        $whereConditions[] = "DATE(p.created_at) <= ?";
         $params[] = $filtros['data_fim'];
     } elseif (!empty($filtros['periodo'])) {
-        $whereConditions[] = "data_pedido >= DATE_SUB(NOW(), INTERVAL ? DAY)";
+        $whereConditions[] = "p.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)";
         $params[] = $filtros['periodo'];
     }
     
@@ -68,9 +68,9 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         // Pedidos por período
         $pedidosQuery = "
             SELECT 
-                DATE(p.data_pedido) as data,
+                DATE(p.created_at) as data,
                 COUNT(*) as total_pedidos,
-                SUM(CASE WHEN p.status = 'entregue' THEN 1 ELSE 0 END) as pedidos_entregues
+                COUNT(CASE WHEN c.status = 'aprovada' THEN 1 END) as pedidos_entregues
             FROM pedidos p
             LEFT JOIN cotacoes c ON p.id = c.pedido_id
             $whereClause
@@ -81,7 +81,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         $cotacaoParams = $params;
         
         if (!empty($filtros['numero_nf'])) {
-            $cotacaoFilters[] = "c.numero_nf LIKE ?";
+            $cotacaoFilters[] = "c.numero_nota_fiscal LIKE ?";
             $cotacaoParams[] = '%' . $filtros['numero_nf'] . '%';
         }
         
@@ -94,7 +94,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
             $pedidosQuery .= (!empty($whereConditions) ? ' AND ' : ' WHERE ') . implode(' AND ', $cotacaoFilters);
         }
         
-        $pedidosQuery .= " GROUP BY DATE(p.data_pedido) ORDER BY data DESC";
+        $pedidosQuery .= " GROUP BY DATE(p.created_at) ORDER BY data DESC";
         
         $stmt = $pdo->prepare($pedidosQuery);
         $stmt->execute($cotacaoParams);
@@ -105,7 +105,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
             SELECT 
                 t.nome as transportadora,
                 COUNT(c.id) as total_cotacoes,
-                AVG(c.valor_frete_calculado) as valor_medio,
+                AVG(COALESCE(c.valor_frete_calculado, c.valor_frete)) as valor_medio,
                 SUM(CASE WHEN c.status = 'aprovada' THEN 1 ELSE 0 END) as cotacoes_aprovadas
             FROM transportadoras t
             LEFT JOIN cotacoes c ON t.id = c.transportadora_id
@@ -144,7 +144,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         }
         
         if (!empty($filtros['numero_nf'])) {
-            $transportadoraConditions[] = "c.numero_nf LIKE ?";
+            $transportadoraConditions[] = "c.numero_nota_fiscal LIKE ?";
             $transportadoraParams[] = '%' . $filtros['numero_nf'] . '%';
         }
         
@@ -167,11 +167,11 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         $resumoQuery = "
             SELECT 
                 COUNT(DISTINCT p.id) as total_pedidos,
-                SUM(CASE WHEN p.status = 'entregue' THEN 1 ELSE 0 END) as pedidos_entregues,
+                COUNT(CASE WHEN c.status = 'aprovada' THEN 1 END) as pedidos_entregues,
                 COUNT(DISTINCT c.id) as total_cotacoes,
                 SUM(CASE WHEN c.status = 'aprovada' THEN 1 ELSE 0 END) as cotacoes_aprovadas,
                 (SELECT COUNT(*) FROM transportadoras WHERE ativo = 1) as transportadoras_ativas,
-                AVG(CASE WHEN c.status = 'aprovada' THEN c.valor_frete_calculado END) as valor_medio_frete
+                AVG(CASE WHEN c.status = 'aprovada' THEN COALESCE(c.valor_frete_calculado, c.valor_frete) END) as valor_medio_frete
             FROM pedidos p
             LEFT JOIN cotacoes c ON p.id = c.pedido_id
             $whereClause
@@ -202,7 +202,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         $faturamentoQuery = "
             SELECT 
                 DATE_FORMAT(c.data_cotacao, '%Y-%m') as mes,
-                SUM(c.valor_frete_calculado) as faturamento,
+                SUM(COALESCE(c.valor_frete_calculado, c.valor_frete)) as faturamento,
                 COUNT(c.id) as total_cotacoes
             FROM cotacoes c
             LEFT JOIN pedidos p ON c.pedido_id = p.id
@@ -239,7 +239,7 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         }
         
         if (!empty($filtros['numero_nf'])) {
-            $faturamentoConditions[] = "c.numero_nf LIKE ?";
+            $faturamentoConditions[] = "c.numero_nota_fiscal LIKE ?";
             $faturamentoParams[] = '%' . $filtros['numero_nf'] . '%';
         }
         
@@ -259,6 +259,10 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
         $data['faturamento_mensal'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
     } catch (Exception $e) {
+        // Log do erro para debug
+        error_log("Erro na função getRelatorioDataComFiltros: " . $e->getMessage());
+        error_log("Stack trace: " . $e->getTraceAsString());
+        
         // Em caso de erro, retornar dados vazios
         $data = [
             'pedidos_periodo' => [],
@@ -271,7 +275,8 @@ function getRelatorioDataComFiltros($pdo, $filtros = []) {
                 'transportadoras_ativas' => 0,
                 'valor_medio_frete' => 0
             ],
-            'faturamento_mensal' => []
+            'faturamento_mensal' => [],
+            'erro' => $e->getMessage() // Adicionar erro para debug
         ];
     }
     
@@ -298,7 +303,13 @@ try {
     $stmt = $pdo->query("SELECT id, nome FROM transportadoras WHERE ativo = 1 ORDER BY nome");
     $transportadoras = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $relatorio_data = [];
+    // Log do erro para debug
+    error_log("Erro ao buscar dados do relatório: " . $e->getMessage());
+    error_log("Stack trace: " . $e->getTraceAsString());
+    
+    $relatorio_data = [
+        'erro' => $e->getMessage()
+    ];
     $transportadoras = [];
 }
 ?>

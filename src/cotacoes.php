@@ -26,10 +26,28 @@ if (!isLoggedIn()) {
     exit();
 }
 
+// Função para converter valor formatado brasileiro para decimal
+function converterValorParaDecimal($valor) {
+    if (empty($valor)) {
+        return 0;
+    }
+    // Remove espaços e substitui vírgula por ponto
+    $valor = str_replace([' ', '.'], '', trim($valor));
+    $valor = str_replace(',', '.', $valor);
+    return floatval($valor);
+}
+
 // Processar formulário de nova cotação
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'nova_cotacao') {
     try {
         $pdo = getDBConnection();
+        
+        // Converter valores formatados para decimal
+        $valor_nota_fiscal = converterValorParaDecimal($_POST['valor_nota_fiscal']);
+        $peso_nota_fiscal = converterValorParaDecimal($_POST['peso_nota_fiscal']);
+        $valor_frete = converterValorParaDecimal($_POST['valor_frete']);
+        $valor_frete_calculado = converterValorParaDecimal($_POST['valor_frete_calculado']);
+        $cubagem_total = converterValorParaDecimal($_POST['cubagem_total']);
         
         // Verificar se já existe cotação para o mesmo pedido ou número de nota fiscal
         $stmt_check = $pdo->prepare("
@@ -60,11 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([
                 $_POST['transportadora_id'],
                 $_POST['numero_nota_fiscal'],
-                $_POST['valor_nota_fiscal'],
-                $_POST['peso_nota_fiscal'],
-                $_POST['valor_frete'],
-                $_POST['valor_frete_calculado'],
-                $_POST['cubagem_total'],
+                $valor_nota_fiscal,
+                $peso_nota_fiscal,
+                $valor_frete,
+                $valor_frete_calculado,
+                $cubagem_total,
                 $_POST['prazo_entrega'],
                 $_POST['observacoes'],
                 $_POST['pedido_id'],
@@ -86,11 +104,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $_POST['pedido_id'],
                 $_POST['transportadora_id'],
                 $_POST['numero_nota_fiscal'],
-                $_POST['valor_nota_fiscal'],
-                $_POST['peso_nota_fiscal'],
-                $_POST['valor_frete'],
-                $_POST['valor_frete_calculado'],
-                $_POST['cubagem_total'],
+                $valor_nota_fiscal,
+                $peso_nota_fiscal,
+                $valor_frete,
+                $valor_frete_calculado,
+                $cubagem_total,
                 $_POST['prazo_entrega'],
                 $_POST['observacoes']
             ]);
@@ -102,11 +120,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 }
 
+// Processar atualização de status da cotação
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'atualizar_status') {
+    header('Content-Type: application/json');
+    
+    try {
+        $pdo = getDBConnection();
+        $cotacao_id = $_POST['cotacao_id'];
+        $status = $_POST['status'];
+        
+        // Validar status
+        if (!in_array($status, ['pendente', 'aprovada', 'rejeitada'])) {
+            throw new Exception('Status inválido');
+        }
+        
+        // Atualizar status da cotação
+        $stmt = $pdo->prepare("UPDATE cotacoes SET status = ?, updated_at = NOW() WHERE id = ?");
+        $stmt->execute([$status, $cotacao_id]);
+        
+        if ($stmt->rowCount() > 0) {
+            echo json_encode(['success' => true, 'message' => 'Status atualizado com sucesso']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Cotação não encontrada']);
+        }
+    } catch (Exception $e) {
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+    }
+    exit;
+}
+
 // Buscar cotações existentes
 try {
     $pdo = getDBConnection();
     $stmt = $pdo->query("
-        SELECT c.*, p.numero_pedido, p.cliente, p.origem, p.destino, t.nome as transportadora_nome
+        SELECT c.*, p.numero_pedido, p.numero_picking, t.nome as transportadora_nome
         FROM cotacoes c 
         LEFT JOIN pedidos p ON c.pedido_id = p.id 
         LEFT JOIN transportadoras t ON c.transportadora_id = t.id 
@@ -115,24 +162,60 @@ try {
     $cotacoes = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $cotacoes = [];
+    error_log("Erro ao buscar cotações: " . $e->getMessage());
 }
 
 // Buscar pedidos para o formulário
 try {
     $pdo = getDBConnection();
-    $stmt = $pdo->query("SELECT id, numero_pedido, numero_picking, cliente, origem, destino FROM pedidos WHERE status = 'pendente' ORDER BY numero_pedido");
-    $pedidos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->query("
+        SELECT p.id, p.numero_pedido, p.numero_picking,
+               COALESCE(SUM(m.cubagem_m3), 0) as cubagem_total,
+               COALESCE(SUM(m.quantidade_volumes * (m.comprimento * m.altura * m.largura) / 1000000 * 300), 0) as peso
+        FROM pedidos p 
+        LEFT JOIN medidas m ON p.id = m.pedido_id 
+        GROUP BY p.id, p.numero_pedido, p.numero_picking
+        ORDER BY p.numero_pedido
+    ");
+    $pedidos_result = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Debug: verificar dados dos pedidos
+    error_log("Pedidos encontrados: " . count($pedidos_result));
+    error_log("Dados dos pedidos: " . json_encode($pedidos_result));
+    
+    // Adicionar campos padrão para compatibilidade
+    $pedidos = [];
+    foreach ($pedidos_result as $pedido) {
+        $pedido['cliente'] = 'Cliente não informado';
+        $pedido['origem'] = 'Origem não informada';
+        $pedido['destino'] = 'Destino não informado';
+        $pedidos[] = $pedido;
+    }
 } catch (Exception $e) {
     $pedidos = [];
+    error_log("Erro ao buscar pedidos: " . $e->getMessage());
 }
 
 // Buscar transportadoras para o formulário
 try {
-    $pdo = getDBConnection();
-    $stmt = $pdo->query("SELECT id, nome, frete_peso, frete_tonelada, frete_minimo, frete_valor, pedagio_peso_cubico FROM transportadoras WHERE ativo = 1 ORDER BY nome");
+    // Buscar transportadoras com os nomes corretos das colunas
+    $query = "SELECT id, nome, 
+                     COALESCE(frete_por_tonelada, 0) as frete_tonelada,
+                     COALESCE(frete_minimo, 0) as frete_minimo,
+                     COALESCE(frete_valor_percentual, 0) as frete_valor,
+                     COALESCE(pedagio, 0) as pedagio_peso_cubico
+              FROM transportadoras 
+              WHERE ativo = 1 
+              ORDER BY nome";
+    
+    $stmt = $pdo->query($query);
     $transportadoras = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Debug: verificar dados das transportadoras
+    error_log("Transportadoras carregadas: " . json_encode($transportadoras));
 } catch (Exception $e) {
     $transportadoras = [];
+    error_log("Erro ao buscar transportadoras: " . $e->getMessage());
 }
 ?>
 
@@ -265,7 +348,7 @@ try {
                                     <thead>
                                         <tr>
                                             <th>Pedido</th>
-                                            <th>Cliente</th>
+                                            <th>Picking</th>
                                             <th>Nº NF</th>
                                             <th>Valor NF</th>
                                             <th>Peso NF</th>
@@ -282,7 +365,7 @@ try {
                                         <?php foreach ($cotacoes as $cotacao): ?>
                                             <tr>
                                                 <td><strong><?php echo htmlspecialchars($cotacao['numero_pedido'] ?? 'N/A'); ?></strong></td>
-                                                <td><?php echo htmlspecialchars($cotacao['cliente'] ?? 'N/A'); ?></td>
+                                                <td><?php echo htmlspecialchars($cotacao['numero_picking'] ?? 'N/A'); ?></td>
                                                 <td><?php echo htmlspecialchars($cotacao['numero_nota_fiscal'] ?? '-'); ?></td>
                                                 <td>
                                                     <?php if ($cotacao['valor_nota_fiscal']): ?>
@@ -325,12 +408,36 @@ try {
                                                 </td>
                                                 <td><?php echo date('d/m/Y H:i', strtotime($cotacao['data_cotacao'])); ?></td>
                                                 <td>
-                                                    <button class="modern-btn-sm success" title="Aprovar">
-                                                        <i class="fas fa-check"></i>
-                                                    </button>
-                                                    <button class="modern-btn-sm danger" title="Rejeitar">
-                                                        <i class="fas fa-times"></i>
-                                                    </button>
+                                                    <?php if ($cotacao['status'] === 'pendente'): ?>
+                                                        <button class="modern-btn-sm success" title="Aprovar" 
+                                                                onclick="return aprovarCotacao(<?php echo $cotacao['id']; ?>)" 
+                                                                data-id="<?php echo $cotacao['id']; ?>">
+                                                            <i class="fas fa-check"></i>
+                                                        </button>
+                                                        <button class="modern-btn-sm danger" title="Rejeitar" 
+                                                                onclick="return rejeitarCotacao(<?php echo $cotacao['id']; ?>)" 
+                                                                data-id="<?php echo $cotacao['id']; ?>">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    <?php elseif ($cotacao['status'] === 'aprovada'): ?>
+                                                        <button class="modern-btn-sm success" disabled title="Já aprovada">
+                                                            <i class="fas fa-check"></i>
+                                                        </button>
+                                                        <button class="modern-btn-sm secondary" title="Rejeitar" 
+                                                                onclick="return rejeitarCotacao(<?php echo $cotacao['id']; ?>)" 
+                                                                data-id="<?php echo $cotacao['id']; ?>">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    <?php elseif ($cotacao['status'] === 'rejeitada'): ?>
+                                                        <button class="modern-btn-sm secondary" title="Aprovar" 
+                                                                onclick="return aprovarCotacao(<?php echo $cotacao['id']; ?>)" 
+                                                                data-id="<?php echo $cotacao['id']; ?>">
+                                                            <i class="fas fa-check"></i>
+                                                        </button>
+                                                        <button class="modern-btn-sm danger" disabled title="Já rejeitada">
+                                                            <i class="fas fa-times"></i>
+                                                        </button>
+                                                    <?php endif; ?>
                                                 </td>
                                             </tr>
                                         <?php endforeach; ?>
@@ -371,13 +478,14 @@ try {
                                     <option value="">Selecione um pedido...</option>
                                     <?php foreach ($pedidos as $pedido): ?>
                                         <option value="<?php echo $pedido['id']; ?>" 
-                                                data-numero="<?php echo htmlspecialchars($pedido['numero_pedido']); ?>"
+                                                data-numero="<?php echo htmlspecialchars($pedido['numero_pedido'] ?? ''); ?>"
                                                 data-picking="<?php echo htmlspecialchars($pedido['numero_picking'] ?? ''); ?>"
-                                                data-cliente="<?php echo htmlspecialchars($pedido['cliente']); ?>"
-                                                data-origem="<?php echo htmlspecialchars($pedido['origem']); ?>"
-                                                data-destino="<?php echo htmlspecialchars($pedido['destino']); ?>"
-                                                data-peso="<?php echo $pedido['peso']; ?>">
-                                            <?php echo htmlspecialchars($pedido['numero_pedido'] . ' - ' . $pedido['cliente']); ?>
+                                                data-cliente="<?php echo htmlspecialchars($pedido['cliente'] ?? ''); ?>"
+                                                data-origem="<?php echo htmlspecialchars($pedido['origem'] ?? ''); ?>"
+                                                data-destino="<?php echo htmlspecialchars($pedido['destino'] ?? ''); ?>"
+                                                data-peso="<?php echo $pedido['peso'] ?? 0; ?>"
+                                                data-cubagem="<?php echo $pedido['cubagem_total'] ?? 0; ?>">
+                                            <?php echo htmlspecialchars(($pedido['numero_pedido'] ?? '') . ' - ' . ($pedido['cliente'] ?? '')); ?>
                                             <?php if (!empty($pedido['numero_picking'])): ?>
                                                 (Picking: <?php echo htmlspecialchars($pedido['numero_picking']); ?>)
                                             <?php endif; ?>
@@ -391,11 +499,10 @@ try {
                                     <option value="">Selecione uma transportadora...</option>
                                     <?php foreach ($transportadoras as $transportadora): ?>
                                         <option value="<?php echo $transportadora['id']; ?>"
-                                                data-frete-peso="<?php echo $transportadora['frete_peso']; ?>"
-                                                data-frete-tonelada="<?php echo $transportadora['frete_tonelada']; ?>"
-                                                data-frete-minimo="<?php echo $transportadora['frete_minimo']; ?>"
-                                                data-frete-valor="<?php echo $transportadora['frete_valor']; ?>"
-                                                data-pedagio-peso-cubico="<?php echo $transportadora['pedagio_peso_cubico']; ?>">
+                                                data-frete-tonelada="<?php echo $transportadora['frete_tonelada'] ?? 0; ?>"
+                                                data-frete-minimo="<?php echo $transportadora['frete_minimo'] ?? 0; ?>"
+                                                data-frete-valor="<?php echo $transportadora['frete_valor'] ?? 0; ?>"
+                                                data-pedagio-peso-cubico="<?php echo $transportadora['pedagio_peso_cubico'] ?? 0; ?>">
                                             <?php echo htmlspecialchars($transportadora['nome']); ?>
                                         </option>
                                     <?php endforeach; ?>
@@ -429,23 +536,23 @@ try {
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label for="valor_nota_fiscal" class="form-label">Valor Nota Fiscal (R$) *</label>
-                                <input type="number" step="0.01" class="form-control" id="valor_nota_fiscal" name="valor_nota_fiscal" required onchange="calcularFrete()">
+                                <input type="text" class="form-control" id="valor_nota_fiscal" name="valor_nota_fiscal" required onchange="calcularFrete()" placeholder="0,00">
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label for="peso_nota_fiscal" class="form-label">Peso Nota Fiscal (kg) *</label>
-                                <input type="number" step="0.01" class="form-control" id="peso_nota_fiscal" name="peso_nota_fiscal" required onchange="calcularFrete()">
+                                <input type="text" class="form-control" id="peso_nota_fiscal" name="peso_nota_fiscal" required onchange="calcularFrete()" placeholder="0,00">
                             </div>
                         </div>
                         
                         <div class="row">
                             <div class="col-md-4 mb-3">
                                 <label for="valor_frete" class="form-label">Valor do Frete (R$) *</label>
-                                <input type="number" step="0.01" class="form-control" id="valor_frete" name="valor_frete" required readonly>
+                                <input type="text" class="form-control" id="valor_frete" name="valor_frete" required readonly placeholder="0,00">
                                 <small class="text-muted">Calculado automaticamente</small>
                             </div>
                             <div class="col-md-4 mb-3">
                                 <label for="valor_frete_calculado" class="form-label">Frete Calculado (R$)</label>
-                                <input type="number" step="0.01" class="form-control" id="valor_frete_calculado" name="valor_frete_calculado" readonly>
+                                <input type="text" class="form-control" id="valor_frete_calculado" name="valor_frete_calculado" readonly placeholder="0,00">
                                 <small class="text-muted">Baseado na tabela da transportadora</small>
                             </div>
                             <div class="col-md-4 mb-3">
@@ -514,19 +621,26 @@ try {
         }
         
         // Buscar dados via AJAX
+        console.log('Carregando dados do pedido:', pedidoId);
         fetch(`get_pedido_cotacao.php?pedido_id=${pedidoId}`)
-            .then(response => response.json())
+            .then(response => {
+                console.log('Resposta recebida:', response);
+                return response.json();
+            })
             .then(data => {
+                console.log('Dados do pedido carregados:', data);
                 if (data.success) {
                     dadosPedidoAtual = data;
                     exibirInformacoesPedido(data);
+                    console.log('Chamando calcularFrete após carregar pedido');
                     calcularFrete();
                 } else {
+                    console.error('Erro nos dados do pedido:', data.error);
                     alert('Erro ao carregar dados do pedido: ' + data.error);
                 }
             })
             .catch(error => {
-                console.error('Erro:', error);
+                console.error('Erro na requisição:', error);
                 alert('Erro ao carregar dados do pedido');
             });
     }
@@ -549,35 +663,63 @@ try {
     
     // Função para calcular frete automaticamente
     function calcularFrete() {
-        const transportadoraSelect = document.getElementById('transportadora_id');
-        const valorNotaFiscal = parseFloat(document.getElementById('valor_nota_fiscal').value) || 0;
-        const pesoNotaFiscal = parseFloat(document.getElementById('peso_nota_fiscal').value) || 0;
+        console.log('Iniciando cálculo de frete...');
         
-        if (!transportadoraSelect.value || !dadosPedidoAtual || valorNotaFiscal === 0) {
+        const transportadoraSelect = document.getElementById('transportadora_id');
+        const valorNotaFiscal = obterValorNumerico(document.getElementById('valor_nota_fiscal'));
+        const pesoNotaFiscal = obterValorNumerico(document.getElementById('peso_nota_fiscal'));
+        
+        console.log('Valores:', {
+            transportadora: transportadoraSelect.value,
+            valorNota: valorNotaFiscal,
+            pesoNota: pesoNotaFiscal,
+            dadosPedido: dadosPedidoAtual
+        });
+        
+        if (!transportadoraSelect.value) {
+            console.log('Transportadora não selecionada');
+            return;
+        }
+        
+        if (!dadosPedidoAtual) {
+            console.log('Dados do pedido não carregados');
+            return;
+        }
+        
+        if (valorNotaFiscal === 0) {
+            console.log('Valor da nota fiscal é zero');
             return;
         }
         
         const option = transportadoraSelect.selectedOptions[0];
-        const fretePeso = parseFloat(option.getAttribute('data-frete-peso')) || 0;
         const freteTonelada = parseFloat(option.getAttribute('data-frete-tonelada')) || 0;
         const freteMinimo = parseFloat(option.getAttribute('data-frete-minimo')) || 0;
         const freteValor = parseFloat(option.getAttribute('data-frete-valor')) || 0;
         const pedagioPesoCubico = parseFloat(option.getAttribute('data-pedagio-peso-cubico')) || 0;
         
-        const cubagem = dadosPedidoAtual.pedido.cubagem_total_m3;
-        const pesoTotal = Math.max(pesoNotaFiscal, dadosPedidoAtual.pedido.peso);
+        console.log('Dados da transportadora:', {
+            freteTonelada,
+            freteMinimo,
+            freteValor,
+            pedagioPesoCubico
+        });
+        
+        const cubagem = dadosPedidoAtual.pedido.cubagem_total_m3 || 0;
+        const pesoTotal = Math.max(pesoNotaFiscal, dadosPedidoAtual.pedido.peso || 0);
+        
+        console.log('Dados para cálculo:', {
+            cubagem,
+            pesoTotal,
+            pesoNota: pesoNotaFiscal,
+            pesoPedido: dadosPedidoAtual.pedido.peso
+        });
         
         // Cálculo do frete baseado na tabela da transportadora
         let freteCalculado = 0;
         
-        // Frete por peso (até 1 tonelada)
-        if (pesoTotal <= 1000) {
-            freteCalculado += fretePeso * pesoTotal;
-        } else {
-            // Frete por tonelada (acima de 1 tonelada)
-            const toneladas = pesoTotal / 1000;
-            freteCalculado += freteTonelada * toneladas;
-        }
+        // Frete por tonelada
+        const toneladas = pesoTotal / 1000;
+        freteCalculado += freteTonelada * toneladas;
         
         // Pedágio por peso cúbico
         freteCalculado += pedagioPesoCubico * cubagem;
@@ -589,9 +731,27 @@ try {
         // Aplicar frete mínimo
         freteCalculado = Math.max(freteCalculado, freteMinimo);
         
-        // Atualizar campos
-        document.getElementById('valor_frete_calculado').value = freteCalculado.toFixed(2);
-        document.getElementById('valor_frete').value = freteCalculado.toFixed(2);
+        // Garantir que o valor não seja negativo
+        freteCalculado = Math.max(freteCalculado, 0);
+        
+        console.log('Resultado do cálculo:', {
+            freteCalculado,
+            toneladas,
+            fretePorTonelada: freteTonelada * toneladas,
+            pedagioCubico: pedagioPesoCubico * cubagem,
+            percentualValor: (freteValor / 100) * valorNotaFiscal,
+            freteMinimo
+        });
+        
+        // Atualizar campos com formatação brasileira
+        const valorFormatado = freteCalculado.toLocaleString('pt-BR', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        document.getElementById('valor_frete_calculado').value = valorFormatado;
+        document.getElementById('valor_frete').value = valorFormatado;
+        
+        console.log('Campos atualizados com valor:', freteCalculado.toFixed(2));
     }
     
     // Função para validar formulário antes do envio
@@ -599,9 +759,9 @@ try {
         const pedidoId = document.getElementById('pedido_id').value;
         const transportadoraId = document.getElementById('transportadora_id').value;
         const numeroNotaFiscal = document.getElementById('numero_nota_fiscal').value.trim();
-        const valorNotaFiscal = parseFloat(document.getElementById('valor_nota_fiscal').value) || 0;
-        const pesoNotaFiscal = parseFloat(document.getElementById('peso_nota_fiscal').value) || 0;
-        const valorFrete = parseFloat(document.getElementById('valor_frete').value) || 0;
+        const valorNotaFiscal = obterValorNumerico(document.getElementById('valor_nota_fiscal'));
+        const pesoNotaFiscal = obterValorNumerico(document.getElementById('peso_nota_fiscal'));
+        const valorFrete = obterValorNumerico(document.getElementById('valor_frete'));
         const prazoEntrega = parseInt(document.getElementById('prazo_entrega').value) || 0;
         
         // Validações
@@ -650,11 +810,62 @@ try {
         return true;
     }
     
-    // Função para formatar campos numéricos
-    function formatarCampoNumerico(campo) {
+    // Função para formatar campos numéricos decimais
+    function formatarCampoDecimal(campo) {
         let valor = campo.value.replace(/[^0-9.,]/g, '');
-        valor = valor.replace(',', '.');
+        
+        // Permitir apenas um ponto ou vírgula decimal
+        let partes = valor.split(/[.,]/);
+        if (partes.length > 2) {
+            valor = partes[0] + '.' + partes[1];
+        } else if (partes.length === 2) {
+            valor = partes[0] + '.' + partes[1];
+        }
+        
+        // Limitar casas decimais a 2
+        if (valor.includes('.')) {
+            let [inteira, decimal] = valor.split('.');
+            if (decimal.length > 2) {
+                decimal = decimal.substring(0, 2);
+            }
+            valor = inteira + '.' + decimal;
+        }
+        
         campo.value = valor;
+    }
+    
+    // Função para formatar valor monetário com máscara
+    function formatarValorMonetario(campo) {
+        let valor = campo.value.replace(/[^0-9.,]/g, '');
+        
+        if (valor === '') {
+            campo.value = '';
+            return;
+        }
+        
+        // Permitir apenas um separador decimal
+        let partes = valor.split(/[.,]/);
+        if (partes.length > 2) {
+            valor = partes[0] + '.' + partes[1];
+        } else if (partes.length === 2) {
+            valor = partes[0] + '.' + partes[1];
+        }
+        
+        // Limitar casas decimais a 2
+        if (valor.includes('.')) {
+            let [inteira, decimal] = valor.split('.');
+            if (decimal && decimal.length > 2) {
+                decimal = decimal.substring(0, 2);
+            }
+            valor = inteira + (decimal ? '.' + decimal : '');
+        }
+        
+        campo.value = valor;
+    }
+    
+    // Função para obter valor numérico de campo formatado
+    function obterValorNumerico(campo) {
+        return parseFloat(campo.value.replace(/[^0-9.,]/g, '').replace(',', '.')) || 0;
     }
     
     // Adicionar validações em tempo real
@@ -663,15 +874,36 @@ try {
     });
     
     document.getElementById('valor_nota_fiscal').addEventListener('input', function() {
-        formatarCampoNumerico(this);
+        formatarCampoDecimal(this);
     });
     
     document.getElementById('peso_nota_fiscal').addEventListener('input', function() {
-        formatarCampoNumerico(this);
+        formatarCampoDecimal(this);
     });
     
     document.getElementById('prazo_entrega').addEventListener('input', function() {
         this.value = this.value.replace(/[^0-9]/g, '');
+    });
+    
+    // Event listeners para calcular frete automaticamente
+    document.getElementById('transportadora_id').addEventListener('change', function() {
+        console.log('Transportadora alterada:', this.value);
+        calcularFrete();
+    });
+    
+    document.getElementById('valor_nota_fiscal').addEventListener('input', function() {
+        console.log('Valor nota fiscal alterado:', this.value);
+        calcularFrete();
+    });
+    
+    document.getElementById('peso_nota_fiscal').addEventListener('input', function() {
+        console.log('Peso nota fiscal alterado:', this.value);
+        calcularFrete();
+    });
+    
+    document.getElementById('pedido_id').addEventListener('change', function() {
+        console.log('Pedido alterado:', this.value);
+        // O cálculo será executado após carregar os dados do pedido
     });
     
     // Event listener para validar formulário no envio
@@ -784,7 +1016,86 @@ try {
                 this.style.transform = 'scale(1)';
             });
         });
+        
     });
+    
+    // Função para aprovar cotação
+    function aprovarCotacao(cotacaoId) {
+        if (confirm('Tem certeza que deseja aprovar esta cotação?')) {
+            atualizarStatusCotacao(cotacaoId, 'aprovada');
+            return true;
+        }
+        return false;
+    }
+    
+    // Função para rejeitar cotação
+    function rejeitarCotacao(cotacaoId) {
+        if (confirm('Tem certeza que deseja rejeitar esta cotação?')) {
+            atualizarStatusCotacao(cotacaoId, 'rejeitada');
+            return true;
+        }
+        return false;
+    }
+    
+    // Função para atualizar status da cotação
+    function atualizarStatusCotacao(cotacaoId, novoStatus) {
+        // Mostrar loading
+        const buttons = document.querySelectorAll(`[data-id="${cotacaoId}"]`);
+        buttons.forEach(btn => {
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        });
+        
+        const formData = new FormData();
+        formData.append('action', 'atualizar_status');
+        formData.append('cotacao_id', cotacaoId);
+        formData.append('status', novoStatus);
+        
+        fetch('cotacoes.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Mostrar mensagem de sucesso
+                const statusText = novoStatus === 'aprovada' ? 'aprovada' : 'rejeitada';
+                
+                // Criar alerta de sucesso
+                const alertDiv = document.createElement('div');
+                alertDiv.className = 'alert alert-success alert-dismissible fade show';
+                alertDiv.innerHTML = `
+                    <i class="fas fa-check-circle"></i> Cotação ${statusText} com sucesso!
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                `;
+                
+                // Inserir alerta no topo da página
+                const mainContent = document.querySelector('.modern-main');
+                mainContent.insertBefore(alertDiv, mainContent.firstChild);
+                
+                // Recarregar a página após 1.5 segundos
+                setTimeout(() => {
+                    location.reload();
+                }, 1500);
+            } else {
+                alert('Erro ao atualizar status: ' + (data.message || 'Erro desconhecido'));
+                // Restaurar botões em caso de erro
+                buttons.forEach(btn => {
+                    btn.disabled = false;
+                    btn.innerHTML = btn.title.includes('Aprovar') ? '<i class="fas fa-check"></i>' : '<i class="fas fa-times"></i>';
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Erro:', error);
+            alert('Erro ao processar solicitação');
+            // Restaurar botões em caso de erro
+            buttons.forEach(btn => {
+                btn.disabled = false;
+                btn.innerHTML = btn.title.includes('Aprovar') ? '<i class="fas fa-check"></i>' : '<i class="fas fa-times"></i>';
+            });
+        });
+    }
     </script>
 </body>
 </html>

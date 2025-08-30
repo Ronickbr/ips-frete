@@ -511,6 +511,9 @@ try {
     
     <!-- JavaScript para Animações -->
     <script>
+    // Variável para verificar se o usuário é administrador
+    const isUserAdmin = <?php echo isAdmin() ? 'true' : 'false'; ?>;
+    
     document.addEventListener('DOMContentLoaded', function() {
         // Animações de entrada
         const observerOptions = {
@@ -619,12 +622,19 @@ try {
             novaMediada.className = 'medida-item border rounded p-3 mb-3';
             novaMediada.setAttribute('data-index', medidaIndex);
             
-            novaMediada.innerHTML = `
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="mb-0">Medida #${medidaIndex + 1}</h6>
+            let removeButtonHtml = '';
+            if (isUserAdmin) {
+                removeButtonHtml = `
                     <button type="button" class="modern-btn-sm danger remove-medida">
                         <i class="fas fa-trash"></i>
                     </button>
+                `;
+            }
+            
+            novaMediada.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0">Medida #${medidaIndex + 1}</h6>
+                    ${removeButtonHtml}
                 </div>
                 <div class="row">
                     <div class="col-md-3 mb-2">
@@ -654,12 +664,17 @@ try {
             container.appendChild(novaMediada);
             adicionarEventListeners(novaMediada);
             
-            // Adicionar event listener para remover
-            novaMediada.querySelector('.remove-medida').addEventListener('click', function() {
-                novaMediada.remove();
-                calcularM3Total();
-                atualizarNumeracaoMedidas();
-            });
+            // Adicionar event listener para remover (apenas se for administrador)
+            if (isUserAdmin) {
+                const removeBtn = novaMediada.querySelector('.remove-medida');
+                if (removeBtn) {
+                    removeBtn.addEventListener('click', function() {
+                        novaMediada.remove();
+                        calcularM3Total();
+                        atualizarNumeracaoMedidas();
+                    });
+                }
+            }
             
             medidaIndex++;
         });
@@ -720,13 +735,20 @@ try {
             const container = document.getElementById('editMedidasContainer');
             const index = container.children.length;
             
+            let removeButtonHtml = '';
+            if (isUserAdmin) {
+                removeButtonHtml = `
+                    <button type="button" class="modern-btn-sm danger" onclick="removerMedidaEdit(this)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                `;
+            }
+            
             const medidaHtml = `
                 <div class="medida-item border rounded p-3 mb-3" data-index="${index}">
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <h6 class="mb-0">Medida ${index + 1}</h6>
-                        <button type="button" class="modern-btn-sm danger" onclick="removerMedidaEdit(this)">
-                            <i class="fas fa-trash"></i>
-                        </button>
+                        ${removeButtonHtml}
                     </div>
                     <div class="row">
                         <div class="col-md-3 mb-2">
