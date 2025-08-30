@@ -38,6 +38,66 @@ try {
     // header('Location: /error.php');
     // exit();
 }
+
+// Funções para buscar dados do dashboard
+function getPedidosHoje() {
+    try {
+        $pdo = getDBConnection();
+        $hoje = date('Y-m-d');
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM pedidos WHERE DATE(created_at) = ?");
+        $stmt->execute([$hoje]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result['total'] ?? 0;
+    } catch (Exception $e) {
+        error_log('Erro ao buscar pedidos de hoje: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function getCotacoesRealizadas() {
+    try {
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM cotacoes");
+        $stmt->execute();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result['total'] ?? 0;
+    } catch (Exception $e) {
+        error_log('Erro ao buscar cotações realizadas: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function getFaturasPendentes() {
+    try {
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM cotacoes WHERE status = 'pendente'");
+        $stmt->execute();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result['total'] ?? 0;
+    } catch (Exception $e) {
+        error_log('Erro ao buscar faturas pendentes: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+function getTransportadorasAtivas() {
+    try {
+        $pdo = getDBConnection();
+        $stmt = $pdo->prepare("SELECT COUNT(*) as total FROM transportadoras WHERE ativo = 1");
+        $stmt->execute();
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result['total'] ?? 0;
+    } catch (Exception $e) {
+        error_log('Erro ao buscar transportadoras ativas: ' . $e->getMessage());
+        return 0;
+    }
+}
+
+// Buscar dados para os cards
+$pedidosHoje = getPedidosHoje();
+$cotacoesRealizadas = getCotacoesRealizadas();
+$faturasPendentes = getFaturasPendentes();
+$transportadorasAtivas = getTransportadorasAtivas();
 ?>
 
 <!DOCTYPE html>
@@ -91,7 +151,7 @@ try {
                             </div>
                             <div class="metric-content">
                                 <div class="metric-label">Pedidos Hoje</div>
-                                <div class="metric-value">0</div>
+                                <div class="metric-value"><?php echo $pedidosHoje; ?></div>
                                 <div class="metric-change positive">
                                     <i class="fas fa-arrow-up"></i> +0%
                                 </div>
@@ -106,7 +166,7 @@ try {
                             </div>
                             <div class="metric-content">
                                 <div class="metric-label">Cotações Realizadas</div>
-                                <div class="metric-value">0</div>
+                                <div class="metric-value"><?php echo $cotacoesRealizadas; ?></div>
                                 <div class="metric-change positive">
                                     <i class="fas fa-arrow-up"></i> +0%
                                 </div>
@@ -121,7 +181,7 @@ try {
                             </div>
                             <div class="metric-content">
                                 <div class="metric-label">Faturas Pendentes</div>
-                                <div class="metric-value">0</div>
+                                <div class="metric-value"><?php echo $faturasPendentes; ?></div>
                                 <div class="metric-change neutral">
                                     <i class="fas fa-minus"></i> 0%
                                 </div>
@@ -136,7 +196,7 @@ try {
                             </div>
                             <div class="metric-content">
                                 <div class="metric-label">Transportadoras Ativas</div>
-                                <div class="metric-value">3</div>
+                                <div class="metric-value"><?php echo $transportadorasAtivas; ?></div>
                                 <div class="metric-change positive">
                                     <i class="fas fa-arrow-up"></i> +0%
                                 </div>
